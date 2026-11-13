@@ -140,6 +140,14 @@ def score_file(sid, transcript):
     seen = st["seen"]
     before = st["total"]
     for raw in chunk[:end].splitlines():
+        if b'"goal_status"' in raw and b'"met":true' in raw:
+            try:
+                a = json.loads(raw).get("attachment") or {}
+                if a.get("type") == "goal_status" and a.get("met") is True:
+                    goal_treat(a.get("condition", ""))
+            except Exception:
+                pass
+            continue
         if b'"output_tokens"' not in raw:
             continue
         try:
@@ -351,6 +359,8 @@ LEGS = {
   "run1":  ["....BBB....BBB", "....WWW....WWW"],
   "legup": [".....BB....BB.BB", ".....WW....WW.WW"],
   "squat": ["..BBB......BB.BB", ".WWW.......WW.WW"],
+  "dig0":  [".....BB....BB.BB", ".....WW....WW.WW"],       # hind leg kicked (drawn in px_pose)
+  "dig1":  ["..BB.BB....BB.BB", "..WW.WW....WW...WW"],     # front paw scrapes
 }
 TAILS = {"up":   [(1, 0, "W"), (2, 1, "B"), (3, 2, "B")],
          "back": [(4, 0, "W"), (4, 1, "B")],
@@ -407,6 +417,8 @@ def build_px(acc):
   "down2": d(hy=5, tail="high"),
   "legup": d(legs="legup", tail="high"),
   "squat": d(legs="squat", tail="high"),
+  "dig0":  d(hy=4, legs="dig0", tail="high"),
+  "dig1":  d(hy=4, legs="dig1", tail="up"),
   "side":  d(hy=5, legs=None, tail="curl", by=6),
   "nap":   d(head="sleep", hy=5, legs=None, tail="curl", by=6),
   "growl": d(head="angry", tail="high"),
@@ -474,8 +486,15 @@ def px_pose(act, t, win):
     if act == "bark":    return [(("bark", "stand")[alt], 0)], []
     if act == "sniff":   return [(("down", "down2")[alt], 0)], []
     if act == "dig":
-        return [("down", 3)], ([("d", 6, 1), ("d", 3, 0), ("d", 8, 2)] if alt
-                               else [("d", 5, 0), ("d", 2, 2), ("d", 7, 1)])
+        # hind leg kicks dirt up and back in an arc; a mound grows under the nose
+        x = 6
+        kick = [("B", 8, x + 2), ("B", 8, x + 1), ("B", 7, x + 1), ("B", 7, x),
+                ("W", 7, x - 1), ("W", 6, x - 1)]
+        spray = kick + [("d", 5, x - 3), ("q", 4, x - 2), ("d", 6, x - 4)] if alt else \
+                [("d", 2, x - 4), ("q", 3, x - 5), ("d", 1, x - 2), ("d", 4, x - 6)]
+        mound = [("d", 9, c) for c in range(x + 18, x + 18 + min(2 + s, 6))] + \
+                ([("q", 8, c) for c in range(x + 19, x + 19 + min(s, 3))] if s >= 2 else [])
+        return [(("dig1", "dig0")[alt], x)], spray + mound
     if act == "scratch":
         return [("sit", 0)], ([("B", 4, 8), ("W", 3, 8)] if alt else [("B", 5, 7), ("W", 4, 7)])
     if act == "pee":
@@ -556,9 +575,35 @@ def px_palette(lv, t):
         return shades.get(c, shades["B"])
     return col
 
+AA_SRC = set("LBsEWCcRGKkAaNnPT")       # sprite codes that get smoothed edges
+AA_BG = (12, 12, 14)                     # assumed (dark) terminal background
+AA_MIX = 0.42
+
+def antialias(g, col):
+    """Return {(r, c): rgb} for empty pixels sitting in a staircase corner
+    (exactly one vertical + one horizontal sprite neighbour, the other two empty)."""
+    H, W = len(g), len(g[0]) if g else 0
+    at = lambda r, c: g[r][c] if 0 <= r < H and 0 <= c < W else None
+    src = lambda r, c: at(r, c) in AA_SRC
+    out = {}
+    for r in range(H):
+        for c in range(W):
+            if g[r][c]:
+                continue
+            v = [(r + d, c) for d in (-1, 1) if src(r + d, c)]
+            h = [(r, c + d) for d in (-1, 1) if src(r, c + d)]
+            if len(v) == 1 and len(h) == 1:
+                cols = [col(at(*q), *q) for q in v + h]
+                out[(r, c)] = tuple(int(sum(x[k] for x in cols) / 2 * AA_MIX + AA_BG[k] * (1 - AA_MIX))
+                                    for k in range(3))
+    return out
+
 def px_lines(g, lv, t):
     """Render a pixel grid as truecolor half-block text lines."""
-    col = px_palette(lv, t)
+    col0 = px_palette(lv, t)
+    aa = antialias(g, col0)
+    g = [[(c or ("~" if (r, j) in aa else None)) for j, c in enumerate(row)] for r, row in enumerate(g)]
+    col = lambda c, r, j: c if isinstance(c, tuple) else aa[(r, j)] if c == "~" else col0(c, r, j)
     fg = lambda c: "\x1b[38;2;%d;%d;%dm" % c
     bg = lambda c: "\x1b[48;2;%d;%d;%dm" % c
     lines = []
@@ -576,6 +621,119 @@ def px_lines(g, lv, t):
                 out += "\x1b[0m "
         lines.append(out + "\x1b[0m")
     return lines
+
+# ---------------------------------------------------------------- scrolling banners
+# Every so often (busy only, pixel style) the dog spots a giant block-letter
+# message coming, runs off screen, the message scrolls through, the dog peeks back.
+BANNER_P = 0.08                    # chance per 3-window (18 s) slot
+BANNER_LEN = 3 * WINDOW
+BANNERS = ["BARK! BARK!", "WORKING!", "BARK BARK", "WORKING LIKE A DOG", "PAWS-ITIVELY BUSY",
+           "RUFF DAY AT THE OFFICE", "FETCHING TOKENS", "SIT. STAY. CODE.", "HOUNDING BUGS",
+           "DOGGEDLY DEBUGGING", "TERRIER-IFIC PROGRESS", "NO TIME TO PAWS",
+           "WHO'S A GOOD COMMIT?", "BUSY AS A BEAGLE", "CHASING DEADLINES", "BONE TO BE WILD"]
+_F = """A .###.#...##...#######...##...##...# B ####.#...##...#####.#...##...#####.
+C .###.#...##....#....#....#...#.###. D ####.#...##...##...##...##...#####.
+E ######....#....####.#....#....##### F ######....#....####.#....#....#....
+G .###.#...##....#.####...##...#.#### H #...##...##...#######...##...##...#
+I .###...#....#....#....#....#...###. J ..###...#....#....#....#.#..#..##..
+K #...##..#.#.#..##...#.#..#..#.#...# L #....#....#....#....#....#....#####
+M #...###.###.#.##.#.##...##...##...# N #...##...###..##.#.##..###...##...#
+O .###.#...##...##...##...##...#.###. P ####.#...##...#####.#....#....#....
+Q .###.#...##...##...##.#.##..#..##.# R ####.#...##...#####.#.#..#..#.#...#
+S .#####....#.....###.....#....#####. T #####..#....#....#....#....#....#..
+U #...##...##...##...##...##...#.###. V #...##...##...##...##...#.#.#...#..
+W #...##...##...##.#.##.#.##.#.#.#.#. X #...##...#.#.#...#...#.#.#...##...#
+Y #...##...#.#.#...#....#....#....#.. Z #####....#...#...#...#...#....#####
+! ..#....#....#....#....#.........#.. ? .###.#...#....#...#...#.........#..
+. ................................#.. , ...........................#...#...
+' ..#....#...#....................... - ................###................
+"""
+FONT = {}
+for _k, _v in zip(_F.split()[0::2], _F.split()[1::2]):
+    FONT[_k] = [_v[i:i + 5] for i in range(0, 35, 5)]
+
+def text_px(msg):
+    """Block-letter pixels of msg: (width, [(row, col)])."""
+    pts, x = [], 0
+    for ch in msg.upper():
+        if ch not in FONT:
+            x += 4
+            continue
+        for r, row in enumerate(FONT[ch]):
+            pts += [(r, x + c) for c, b in enumerate(row) if b == "#"]
+        x += 6
+    return x - 1, pts
+
+BANNER_NOW = os.path.join(HOME, "banner_now")
+
+def banner_at(sid, t, busy=True):
+    """-> (start_time, message, direction) while a banner scene is running."""
+    try:                                   # /walkies banner: play one right now
+        t0 = float(open(BANNER_NOW).read())
+        if t - t0 < BANNER_LEN:
+            rnd = random.Random(t0)
+            return t0, rnd.choice(BANNERS), rnd.choice(["lr", "rl", "tb", "bt"])
+    except Exception:
+        pass
+    if not busy:
+        return None
+    win = int(t // WINDOW)
+    k = win - win % 3
+    rnd = random.Random(f"banner:{sid}:{k}")
+    if rnd.random() >= BANNER_P:
+        return None
+    return k * WINDOW, rnd.choice(BANNERS), rnd.choice(["lr", "rl", "tb", "bt"])
+
+def banner_frame(bn, t, track, lv):
+    """-> (pixel grid, words) for one frame of a banner scene."""
+    t0, msg, d = bn
+    e = t - t0
+    W = track + 22
+    tw, pts = text_px(msg)
+    if d in ("tb", "bt") and tw > W:
+        d = "lr"
+    g = [[None] * W for _ in range(10)]
+    def paste(rows, x):
+        for i, row in enumerate(rows):
+            for j, c in enumerate(row):
+                if c and 0 <= x + j < W:
+                    g[i][x + j] = c
+    c0 = int(t0 * SPEED) % (track * 2)
+    pos0 = c0 if c0 < track else track * 2 - c0
+    flee = 1 if d == "lr" or (d in ("tb", "bt") and pos0 > track / 2) else -1
+    if d == "rl":
+        flee = -1
+    words = ""
+    if e < 1:                                          # spots it
+        paste(px_grid([("bark", 0)], [], flip=flee > 0, W=24, lv=lv, t=t), pos0)
+        words = "!?"
+    elif e < 4:                                        # bolts
+        x = int(pos0 + flee * 40 * (e - 1))
+        paste(px_grid([(("run0", "run1")[int(t) % 2], 0)], [], flip=flee < 0, W=24, lv=lv, t=t), x)
+        words = ["RUN!!", "it's coming!", "nope nope nope"][int(e) - 1]
+    elif e < BANNER_LEN - 2:                           # the message rolls through
+        f = (e - 4) / (BANNER_LEN - 6)
+        if d in ("lr", "rl"):
+            ox = int(-tw + (W + tw) * f) if d == "lr" else int(W - (W + tw) * f)
+            oy = 1
+        else:
+            ox = max(0, (W - tw) // 2)
+            oy = int(-7 + 17 * f) if d == "tb" else int(10 - 17 * f)
+        hue = lambda c: tuple(int(v * 255) for v in colorsys.hsv_to_rgb((c * 0.012 + t * 0.15) % 1, 0.75, 1.0))
+        dark = lambda c: tuple(int(v * 255) for v in colorsys.hsv_to_rgb((c * 0.012 + t * 0.15) % 1, 0.8, 0.4))
+        for r, c in pts:                                # drop shadow first, then the letters
+            y, x = oy + r + 1, ox + c + 1
+            if 0 <= y < 10 and 0 <= x < W:
+                g[y][x] = dark(c)
+        for r, c in pts:
+            y, x = oy + r, ox + c
+            if 0 <= y < 10 and 0 <= x < W:
+                g[y][x] = hue(c)
+    else:                                              # peeks back in
+        x = int((W if flee > 0 else -22) - flee * 20 * (e - (BANNER_LEN - 2)))
+        paste(px_grid([(("run0", "run1")[int(t) % 2], 0)], [], flip=flee > 0, W=24, lv=lv, t=t), x)
+        words = "*peeks* is it gone?"
+    return g, words
 
 OFF = os.path.join(HOME, "off")
 
@@ -603,6 +761,7 @@ REACT_WORDS = {
     "eat":   ["TREAT!!", "*nom nom nom*", "*crunch crunch*", "*licks bowl*"],
     "beg":   ["*whimper*", "treat? 🥺", "so… hungry…", "/walkies treat pls"],
 }
+GOAL_WORDS = ["GOAL ACHIEVED! 🎯", "treat earned! *nom nom*", "good human! 🦴", "*happy crunching*"]
 ASCII_MAP = {"chew": "wag", "joy": "wag", "growl": "bark", "eat": "sniff",
              "beg": "wag", "fetch": "ball"}
 
@@ -651,9 +810,11 @@ def react_hook(mode, data):
 
 def reaction(sid, t):
     """Current tool reaction, a fresh treat, or None."""
-    tr = load(HUNGER, {}).get("treat_at", 0)
-    if t - tr < 8:
-        return {"kind": "eat", "label": "", "t": tr}
+    h = load(HUNGER, {})
+    tr = h.get("treat_at", 0)
+    goal = h.get("treat_why") == "goal"
+    if t - tr < (15 if goal else 8):
+        return {"kind": "eat", "label": "", "t": tr, "goal": goal}
     st = load(os.path.join(TMP, f"claude-dog-tool-{sid}.json"), None)
     if not st:
         return None
@@ -681,10 +842,22 @@ def give_treat():
         print(f"FULL: the dog sniffs the treat and flops over, already stuffed ({f:.0%} full).")
         return
     now = time.time()
-    h.update(fed_at=now, treat_at=now, treats=h.get("treats", 0) + 1)
+    h.update(fed_at=now, treat_at=now, treat_why="manual", treats=h.get("treats", 0) + 1)
     save(HUNGER, h)
     print(f"TREAT: nom nom nom! Fullness {f:.0%} -> 100%. Treats given so far: {h['treats']}. "
           f"+{FED_BONUS:.0%} XP while it's over half full.")
+
+def goal_treat(condition):
+    """A /goal was met: the dog gets a treat, full or not (once per goal)."""
+    h = load(HUNGER, {})
+    key = hashlib.sha1(condition.encode()).hexdigest()[:12]
+    done = h.get("goals_done", [])
+    if key in done:
+        return
+    now = time.time()
+    h.update(fed_at=now, treat_at=now, treat_why="goal", treats=h.get("treats", 0) + 1,
+             goals=h.get("goals", 0) + 1, goals_done=(done + [key])[-200:])
+    save(HUNGER, h)
 
 def fed_bonus(tokens):
     if tokens > 0 and fullness()[0] > 0.5:
@@ -735,7 +908,8 @@ def stats():
     row(f"Playing for       {days:>9.1f} days")
     row()
     hunger = "stuffed" if f > 0.9 else "happy" if f > 0.5 else "peckish" if f > 0.2 else "HUNGRY"
-    row(f"🍖 Belly  {bar(math.ceil(f * 10) / 10, 10)} {f:.0%} ({hunger}), {h.get('treats', 0)} treats")
+    row(f"🍖 Belly  {bar(math.ceil(f * 10) / 10, 10)} {f:.0%} ({hunger}), {h.get('treats', 0)} treats"
+        + (f", {h['goals']} 🎯" if h.get("goals") else ""))
     row(f"💧 {c.get('pee', 0)}   💩 {c.get('poop', 0)}")
     row()
     row(f"🏅 Badges {len(a.get('got', {}))}/{len(ACHIEVEMENTS)}")
@@ -782,7 +956,14 @@ def render(sid, transcript=None):
     track = max(10, cols - RIGHT_RESERVE - (24 if style() == "pixel" else 14))
     react = reaction(sid, t)
     full, _ = fullness(t)
-    if busy or react:
+    bn = banner_at(sid, t, busy) if style() == "pixel" and not (
+        react and react["kind"] in ("growl", "joy", "eat")) else None
+    if bn:
+        g, words = banner_frame(bn, t, track, lv)
+        lines = px_lines(g, lv, t)
+        if words:
+            lines[0] += f"  {O}{words}{R}"
+    elif busy or react:
         win = int(t // WINDOW)
         act = pick_activity(sid, win)
         if react:
@@ -814,7 +995,7 @@ def render(sid, transcript=None):
             art = frames[step]
             words = says[min(int(t - win * WINDOW) // 2, len(says) - 1)]
         if react or act == "beg":
-            ws = REACT_WORDS[react["kind"] if react else "beg"]
+            ws = GOAL_WORDS if (react or {}).get("goal") else REACT_WORDS[react["kind"] if react else "beg"]
             label = (react or {}).get("label") or "it"
             words = ws[int((t - (react["t"] if react else 0)) // 2) % len(ws)].format(label=label)
         if style() == "pixel":
@@ -871,6 +1052,11 @@ def main():
     arg = sys.argv[2].lower() if len(sys.argv) > 2 else ""
     if mode == "toggle" and arg == "treat":
         give_treat()
+        return
+    if mode == "toggle" and arg == "banner":
+        with open(BANNER_NOW, "w") as f:
+            f.write(str(time.time() + 2))
+        print("BANNER: incoming! The dog has spotted something big on the horizon.")
         return
     if mode == "toggle" and arg == "stats":
         stats()

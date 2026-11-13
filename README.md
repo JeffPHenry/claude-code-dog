@@ -24,12 +24,16 @@ doing, and levels up from the tokens Claude writes for you.
   | hitting a tool error            | growls, angry eyebrows                 |
   | seeing your tests pass          | confetti                               |
 
+- **Runs from giant banners.** Every few minutes a huge rainbow block-letter message (BARK! BARK!,
+  WORKING LIKE A DOG, SIT. STAY. CODE., ...) scrolls through from a random direction. The dog spots
+  it, bolts off screen, and peeks back once it's gone.
 - **Levels up.** XP = output tokens Claude writes (including subagents). 100 levels, tuned so early
   levels come daily and the late game takes years. Every level gets its own coat color.
 - **Earns gear.** Bandana (Lv 10), spotted coat (20), sunglasses (30), superhero cape (40),
   two-tone coat (50), crown (70), sparkles (80), animated rainbow (100).
 - **Gets hungry.** The food bowl empties over ~8 hours. Feed it with `/walkies treat` and you earn
-  +10% XP while it's more than half full. Let it starve and it sits there begging.
+  +10% XP while it's more than half full. Let it starve and it sits there begging. Finish a
+  `/goal` and the dog gets a treat automatically.
 - **Badges.** Seven achievements (some of them involve the lawn), each with an XP bonus.
 - **Custom spinner verbs.** "Bark bark…", "Sniffing around…", "Chewing on it…".
 
@@ -57,6 +61,7 @@ Respects `CLAUDE_CONFIG_DIR` if you use a non-default config directory.
 | `/walkies`         | toggle the dog on/off (XP keeps counting when off)  |
 | `/walkies treat`   | feed the dog                                        |
 | `/walkies stats`   | level, XP breakdown, pace, badges, gear ETA dates   |
+| `/walkies banner`  | play a scrolling banner right now                   |
 | `/walkies ascii`   | switch to the old-school text dog                   |
 | `/walkies pixel`   | back to pixel art                                   |
 
