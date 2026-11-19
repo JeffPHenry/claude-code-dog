@@ -311,10 +311,11 @@ def mirror(lines):
 
 def pick_activity(sid, win):
     r = random.Random(f"{sid}:{win}").random()
-    for name, p in (("poop", .0007), ("pee", .003), ("dig", .09), ("scratch", .09),
-                    ("wag", .07), ("sniff", .06), ("bark", .06),
-                    ("ball", .05), ("stick", .05), ("roll", .04), ("rollrun", .04),
-                    ("tail", .05)):
+    for name, p in (("poop", .0007), ("pee", .003), ("dig", .04), ("scratch", .035),
+                    ("wag", .03), ("sniff", .04), ("bark", .03),
+                    ("ball", .035), ("stick", .03), ("roll", .025), ("rollrun", .03),
+                    ("tail", .03), ("frisbee", .04), ("squirrel", .05), ("bow", .025),
+                    ("shake", .025), ("howl", .02), ("tilt", .02)):
         if r < p:
             return name
         r -= p
@@ -359,7 +360,8 @@ LEGS = {
   "run1":  ["....BBB....BBB", "....WWW....WWW"],
   "legup": [".....BB....BB.BB", ".....WW....WW.WW"],
   "squat": ["..BBB......BB.BB", ".WWW.......WW.WW"],
-  "dig0":  [".....BB....BB.BB", ".....WW....WW.WW"],       # hind leg kicked (drawn in px_pose)
+  "dig0":  [".....BB....BB.BB", ".....WW....WW.WW"],
+  "bow":   ["..BB.BB.........", "..WW.WW...WWWWWW"],       # front paws stretched out       # hind leg kicked (drawn in px_pose)
   "dig1":  ["..BB.BB....BB.BB", "..WW.WW....WW...WW"],     # front paw scrapes
 }
 TAILS = {"up":   [(1, 0, "W"), (2, 1, "B"), (3, 2, "B")],
@@ -398,6 +400,21 @@ def dog(head="n", hx=12, hy=0, legs="stand", tail="up", by=4, acc=()):
         put([".G.G.G", "..GRG"], hy, hx)
     return ["".join(r) for r in g]
 
+def lower_front(rows):
+    """Play bow: rear end up a pixel (longer hind legs), chest down a pixel."""
+    g = [list(r) for r in rows]
+    for c in range(0, 9):                         # rear: shift up, stretch the legs
+        col = [g[r][c] for r in range(10)]
+        for r in range(9):
+            g[r][c] = col[r + 1]
+        g[9][c] = col[9]
+    for c in range(10, 20):                       # chest + head: shift down
+        col = [g[r][c] for r in range(10)]
+        for r in range(1, 10):
+            g[r][c] = col[r - 1] if col[r - 1] != "." or r < 9 else col[r]
+        g[0][c] = "."
+    return ["".join(r) for r in g]
+
 _PX_CACHE = {}
 def px_set(lv):
     acc = frozenset(accessories(lv))
@@ -419,6 +436,15 @@ def build_px(acc):
   "squat": d(legs="squat", tail="high"),
   "dig0":  d(hy=4, legs="dig0", tail="high"),
   "dig1":  d(hy=4, legs="dig1", tail="up"),
+  "leap":  d(head="pant", hy=2, legs="run0", tail="back"),
+  "bow0":  lower_front(d(hy=3, legs="bow", tail="high")),
+  "bow1":  lower_front(d(head="happy", hy=3, legs="bow", tail="up")),
+  "shake": d(head="flap", tail="back"),
+  "tilt":  d(hy=1),
+  "howl":  ["..............BWK....", "...........BBBWW.....", "..........BLkB..P....",
+            ".........EEBBWW......", ".........EEBWWW......", "........LBBRRGW.....",
+            "......LEEEBBBWW.....", "....LEEEEEBBBWW.....", "...sssssssBBBWW.....",
+            "..WWWWWW...WW.WW...."],
   "side":  d(hy=5, legs=None, tail="curl", by=6),
   "nap":   d(head="sleep", hy=5, legs=None, tail="curl", by=6),
   "growl": d(head="angry", tail="high"),
@@ -450,6 +476,8 @@ PX_FIXED = {"b": (240, 228, 195),                                  # bone
             "R": (220, 40, 50), "G": (255, 205, 40),
             "Y": (200, 235, 50), "V": (240, 255, 170),          # tennis ball
             "T": (150, 95, 45), "U": (100, 60, 25),             # stick
+            "F": (255, 75, 60), "f": (255, 190, 170),          # frisbee
+            "w": (130, 200, 255),                              # water drops
             "y": (250, 225, 60), "p": (120, 75, 30), "q": (85, 50, 20),
             "d": (140, 105, 65), "g": (150, 150, 150), "h": (90, 90, 90)}
 STYLE = os.path.join(HOME, "style")
@@ -482,6 +510,32 @@ def px_pose(act, t, win):
         rnd = random.Random(int(t))
         conf = [(rnd.choice("XZAPYRV"), rnd.randrange(0, 9), rnd.randrange(0, 30)) for _ in range(9)]
         return [(("wag", "bark")[alt], 6)], conf
+    if act == "frisbee":
+        fr = lambda r, x: [("f", r, x), ("F", r, x + 1), ("F", r, x + 2), ("f", r, x + 3)]
+        return [[("bark", 0), ("run0", 4), ("run1", 10), ("leap", 14, -2), ("run1M", 10), ("wag", 2)][s]], \
+               [fr(0, 30), fr(1, 33), fr(2, 33), fr(1, 31), fr(4, 8), fr(4, 20)][s]
+    if act == "squirrel":
+        gap = 22 + (s >= 5) * 8 + alt
+        sx = gap
+        hop = alt                                   # bounding gait
+        tail = [(8, 1), (7, 0), (7, 1), (6, 0), (6, 1), (5, 0), (5, 1), (4, 0), (4, 1), (3, 1), (3, 2), (4, 2)]
+        body = [(6, 3), (6, 4), (7, 2), (7, 3), (7, 4), (8, 2), (8, 3), (8, 4),
+                (5, 5), (5, 6), (6, 5), (6, 6), (6, 7), (4, 5)]
+        sq = [("U", r - hop, sx + c) for r, c in tail] + [("T", r - hop, sx + c) for r, c in body] + \
+             [("V", 6 - hop, sx + 3), ("K", 5 - hop, sx + 6), ("K", 6 - hop, sx + 7)] + \
+             ([("U", 9, sx + 2), ("U", 9, sx + 5)] if not hop else [("U", 8, sx + 1), ("U", 8, sx + 6)])
+        return [(("run0", "run1")[alt], 0)], sq
+    if act == "bow":     return [(("bow0", "bow1")[alt], 0)], []
+    if act == "shake":
+        rnd = random.Random(int(t * 3))
+        drops = [("w", rnd.randrange(0, 8), rnd.randrange(0, 24)) for _ in range(7)]
+        return [("shake", alt)], drops
+    if act == "howl":
+        note = [("Z", 2 - s % 3, 19 + s % 3), ("Z", 1 - s % 3, 20 + s % 3)]
+        return [("howl", 0)], [d for d in note if d[1] >= 0]
+    if act == "tilt":
+        q = [("W", 0, 21), ("W", 0, 22), ("W", 0, 23), ("W", 1, 23), ("W", 2, 22), ("W", 2, 23), ("W", 4, 22)]
+        return [(("tilt", "stand")[s % 3 == 2], 0)], q if s >= 1 else []
     if act == "wag":     return [(("stand", "wag")[alt], 0)], []
     if act == "bark":    return [(("bark", "stand")[alt], 0)], []
     if act == "sniff":   return [(("down", "down2")[alt], 0)], []
@@ -529,14 +583,15 @@ def px_grid(sprites, dots, flip=False, W=44, lv=1, t=0.0):
     px = px_set(lv)
     blink = int(t) % 6 == 0
     g = [[None] * W for _ in range(10)]
-    for name, x in sprites:
+    for spr in sprites:
+        name, x, y = spr[0], spr[1], (spr[2] if len(spr) > 2 else 0)
         rows = px[name.rstrip("M")]
         if name.endswith("M"):
             rows = [r[::-1] for r in rows]
         for i, row in enumerate(rows):
             for j, c in enumerate(row):
-                if c != "." and 0 <= x + j < W:
-                    g[i][x + j] = c
+                if c != "." and 0 <= x + j < W and 0 <= i + y < 10:
+                    g[i + y][x + j] = c
     if blink:
         g = [[("E" if c == "k" else c) for c in row] for row in g]
     feet = [j for j in range(W) if g[9][j] or g[8][j]]
@@ -782,7 +837,7 @@ def banner_at(sid, t, busy=True):
         return None
     return k * WINDOW, rnd.choice(BANNERS), rnd.choice(["lr", "rl", "tb", "bt"])
 
-def banner_frame(bn, t, track, lv):
+def banner_frame(bn, t, track, lv, pos0=None):
     """-> (pixel grid, words) for one frame of a banner scene."""
     t0, msg, d = bn
     e = t - t0
@@ -796,8 +851,9 @@ def banner_frame(bn, t, track, lv):
             for j, c in enumerate(row):
                 if c and 0 <= x + j < W:
                     g[i][x + j] = c
-    c0 = int(t0 * SPEED) % (track * 2)
-    pos0 = c0 if c0 < track else track * 2 - c0
+    if pos0 is None:
+        c0 = int(t0 * SPEED) % (track * 2)
+        pos0 = c0 if c0 < track else track * 2 - c0
     flee = 1 if d == "lr" or (d in ("tb", "bt") and pos0 > track / 2) else -1
     if d == "rl":
         flee = -1
@@ -859,8 +915,18 @@ REACT_WORDS = {
     "eat":   ["TREAT!!", "*nom nom nom*", "*crunch crunch*", "*licks bowl*"],
     "beg":   ["*whimper*", "treat? 🥺", "so… hungry…", "/walkies treat pls"],
 }
+ACT_WORDS = {
+    "frisbee":  ["FRISBEE!", "*gallop gallop*", "*gallop*", "*LEAP* GOT IT!", "*proud trot*", "again! again!"],
+    "squirrel": ["SQUIRREL!", "*ZOOM*", "come back here!", "*ZOOOOM*", "so close!", "it went up a tree…"],
+    "bow":      ["*play bow*", "play with me!", "*wiggle wiggle*"],
+    "shake":    ["*shake shake shake*", "*splash*", "*flap flap flap*"],
+    "howl":     ["AWOOOOO", "awoo… awOOO!", "*howls at the build*"],
+    "tilt":     ["huh?", "*head tilt*", "did you say… walk?"],
+}
+MOVE = {"run": 8, "squirrel": 11, "sniff": 3}     # columns per second while doing it
 GOAL_WORDS = ["GOAL ACHIEVED! 🎯", "treat earned! *nom nom*", "good human! 🦴", "*happy crunching*"]
-ASCII_MAP = {"chew": "wag", "joy": "wag", "growl": "bark", "eat": "sniff",
+ASCII_MAP = {"frisbee": "ball", "squirrel": "bark", "bow": "wag", "shake": "wag",
+             "howl": "bark", "tilt": "sniff", "chew": "wag", "joy": "wag", "growl": "bark", "eat": "sniff",
              "beg": "wag", "fetch": "ball"}
 
 def tool_kind(name):
@@ -1057,7 +1123,7 @@ def render(sid, transcript=None):
     bn = banner_at(sid, t, busy) if style() == "pixel" and not (
         react and react["kind"] in ("growl", "joy", "eat")) else None
     if bn:
-        g, words = banner_frame(bn, t, track, lv)
+        g, words = banner_frame(bn, t, track, lv, int(min(ev.get("x", 0), track)))
         lines = px_lines(g, lv, t)
         if words:
             lines[0] += f"  {O}{words}{R}"
@@ -1074,10 +1140,18 @@ def render(sid, transcript=None):
             ev["last_win"] = win
             save(evp, ev)
             achievements(act)
-        when = react["t"] if react else win * WINDOW if act != "run" else t
-        cyc = int(when * SPEED) % (track * 2)
-        right = cyc < track
-        pos = cyc if right else track * 2 - cyc
+        x, d = min(float(ev.get("x", track / 2)), track), ev.get("dir", 1)
+        if act in ("run", "squirrel") and ev.get("turn_win") != win:   # sometimes turn around
+            ev["turn_win"] = win
+            if random.Random(f"turn:{sid}:{win}").random() < 0.3:
+                d = -d
+        x += d * MOVE.get(act, 0) * min(max(t - ev.get("pt", t), 0), 2)
+        if x >= track:
+            x, d = track, -1
+        elif x <= 0:
+            x, d = 0, 1
+        ev.update(x=x, dir=d, pt=t)
+        pos, right = int(x), d > 0
         aact = ASCII_MAP.get(act, act)
         if act == "fetch":
             act = "ball"
@@ -1092,6 +1166,9 @@ def render(sid, transcript=None):
                 if aact in ("pee", "poop") else int(t) % len(frames)
             art = frames[step]
             words = says[min(int(t - win * WINDOW) // 2, len(says) - 1)]
+        if act in ACT_WORDS:
+            ws = ACT_WORDS[act]
+            words = ws[min(int(t - win * WINDOW) * len(ws) // WINDOW, len(ws) - 1)]
         if react or act == "beg":
             ws = GOAL_WORDS if (react or {}).get("goal") else REACT_WORDS[react["kind"] if react else "beg"]
             label = (react or {}).get("label") or "it"
